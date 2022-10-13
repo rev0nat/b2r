@@ -1,0 +1,40 @@
+PHASE_2 LAURIE SSH (BOMBASTIC)
+
+In Laurie's home, there is a file called 'bomb'. This file is a challenge with 6 steps to defuse, and the concatenated result of each phase gives us password to Thor's ssh.
+
+BOMB PHASE 1
+Using gdb, we disas phase_1 function, and find the first hint:
+	(gdb) x/s 0x80497c0
+        0x80497c0:       "Public speaking is very easy."
+
+BOMB PHASE 2
+We disas phase_2 function, and after reconstructing the function with ghidra, we find that the function is waiting for a suite of 6 numbers, each one beeing its position in string multiplied by the previous number. Gives us:
+1 2 6 24 120 720
+
+BOMB PHASE 3
+Phase_3 function dissassembled is looking for a number, a char and another number.
+working results:
+1b214
+2b755
+
+BOMB PHASE 4
+See phase_4_test_func.py for resolution.
+Phase_4 function awaits for a number greater than 1, the wanted value is:
+9
+
+BOMB PHASE 5
+See phase_5_transform_string.py for resolution.
+Wanted answer is:
+opekmq
+
+BOMB PHASE 6
+See extended walkthrough for more information.
+Answer:
+	4 2 6 3 1 5
+
+All of these answers give us the password for thor's account, except that there is a catch, two digits must be inverted in order for it to work. There is apparently a problem with the ISO.
+	ORIGINAL_PASSWORD = Publicspeakingisveryeasy.126241207201b2149opekmq426315
+	WORKING_PASSWORD = Publicspeakingisveryeasy.126241207201b2149opekmq426135
+We can connect to thor's ssh using this password.
+
+PART 2 DONE

